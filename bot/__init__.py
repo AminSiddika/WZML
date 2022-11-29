@@ -248,7 +248,21 @@ if len(TG_SPLIT_SIZE) == 0 or int(TG_SPLIT_SIZE) > tgBotMaxFileSize:
     TG_SPLIT_SIZE = tgBotMaxFileSize
 else:
     TG_SPLIT_SIZE = int(TG_SPLIT_SIZE)
-
+try:
+    TOKEN_PICKLE_URL = getConfig('TOKEN_PICKLE_URL')
+    if len(TOKEN_PICKLE_URL) == 0:
+        raise KeyError
+    try:
+        res = rget(TOKEN_PICKLE_URL)
+        if res.status_code == 200:
+            with open('token.pickle', 'wb+') as f:
+                f.write(res.content)
+        else:
+            log_error(f"Failed to download token.pickle, link got HTTP response: {res.status_code}")
+    except Exception as e:
+        log_error(f"TOKEN_PICKLE_URL: {e}")
+except:
+    pass
 try:
     USER_SESSION_STRING = environ.get('USER_SESSION_STRING', '')
     if len(USER_SESSION_STRING) != 0:
