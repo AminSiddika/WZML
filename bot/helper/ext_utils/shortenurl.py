@@ -1,5 +1,3 @@
-
-
 from random import random, choice
 
 from cfscrape import create_scraper
@@ -9,12 +7,14 @@ from urllib3 import disable_warnings
 
 from bot import LOGGER, config_dict
 
-
-SHORTENER_API = config_dict['SHORTENER_API']
-SHORTENER = config_dict['SHORTENER']
 def short_url(longurl):
-    if SHORTENER == '' and SHORTENER_API == '':
+    API_LIST = config_dict['SHORTENER_API']
+    SHORT_LIST = config_dict['SHORTENER']
+    if len(SHORT_LIST) == 0 and len(API_LIST) == 0:
         return longurl
+    SHORTENER = choice(SHORT_LIST)
+    try: SHORTENER_API = API_LIST[SHORT_LIST.index(SHORTENER)]
+    except IndexError: LOGGER.error(f"{SHORTENER}'s API Key Not Found"); return longurl
     try:
         cget = create_scraper().get
         try:
@@ -48,6 +48,9 @@ def short_url(longurl):
         elif "cutt.ly" in SHORTENER:
             disable_warnings()
             return cget(f'http://cutt.ly/api/api.php?key={SHORTENER_API}&short={longurl}', verify=False).json()['url']['shortLink']
+        elif "shrinkme.io" in SHORTENER:
+            disable_warnings()
+            return cget(f'https://shrinkme.io/api?api={SHORTENER_API}&url={quote(longurl)}&format=text').text           
         else:
             return cget(f'https://{SHORTENER}/api?api={SHORTENER_API}&url={quote(longurl)}&format=text').text
     except Exception as e:

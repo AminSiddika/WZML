@@ -1,5 +1,6 @@
 from telegram.ext import CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 from functools import partial
+from collections import OrderedDict
 from time import time, sleep
 from os import remove, rename, path as ospath, environ
 from subprocess import run as srun, Popen
@@ -41,6 +42,7 @@ default_values = {'AUTO_DELETE_MESSAGE_DURATION': 30,
                   'CAPTION_FONT': 'code',
                   'FINISHED_PROGRESS_STR': '█',
                   'UN_FINISHED_PROGRESS_STR': '▒',
+                  'MULTI_WORKING_PROGRESS_STR': '▁ ▂ ▃ ▄ ▅ ▆ ▇'.split(' '),
                   'CHANNEL_USERNAME': 'WeebZone_updates',
                   'FSUB_CHANNEL_ID': '-1001512307861',
                   'IMAGE_URL': 'https://graph.org/file/6b22ef7b8a733c5131d3f.jpg',
@@ -231,14 +233,28 @@ def load_config():
     TORRENT_TIMEOUT = environ.get('TORRENT_TIMEOUT', '')
     downloads = aria2.get_downloads()
     if len(TORRENT_TIMEOUT) == 0:
-        if downloads:
-            aria2.set_options({'bt-stop-timeout': '0'}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {'bt-stop-timeout': '0'})
+                except Exception as e:
+                    LOGGER.error(e)
         aria2_options['bt-stop-timeout'] = '0'
+        if DATABASE_URL:
+            DbManger().update_aria2('bt-stop-timeout', '0')
+        TORRENT_TIMEOUT = ''
     else:
-        if downloads:
-            aria2.set_options({'bt-stop-timeout': TORRENT_TIMEOUT}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {'bt-stop-timeout': TORRENT_TIMEOUT})
+                except Exception as e:
+                    LOGGER.error(e)
         aria2_options['bt-stop-timeout'] = TORRENT_TIMEOUT
+        if DATABASE_URL:
+            DbManger().update_aria2('bt-stop-timeout', TORRENT_TIMEOUT)
         TORRENT_TIMEOUT = int(TORRENT_TIMEOUT)
+
 
 
     TORRENT_DIRECT_LIMIT = environ.get('TORRENT_DIRECT_LIMIT', '')
@@ -550,9 +566,12 @@ def load_config():
 
     FINISHED_PROGRESS_STR = environ.get('FINISHED_PROGRESS_STR', '')
     UN_FINISHED_PROGRESS_STR = environ.get('UN_FINISHED_PROGRESS_STR', '')
-    if len(FINISHED_PROGRESS_STR) == 0 or len(FINISHED_PROGRESS_STR) == 0:
+    MULTI_WORKING_PROGRESS_STR = environ.get('MULTI_WORKING_PROGRESS_STR', '')
+    MULTI_WORKING_PROGRESS_STR = MULTI_WORKING_PROGRESS_STR.split(' ')
+    if len(FINISHED_PROGRESS_STR) == 0 or len(FINISHED_PROGRESS_STR) == 0 or len(MULTI_WORKING_PROGRESS_STR) == 0:
         FINISHED_PROGRESS_STR = '█' # '■'
         UN_FINISHED_PROGRESS_STR = '▒' # '□'
+        MULTI_WORKING_PROGRESS_STR = '▁ ▂ ▃ ▄ ▅ ▆ ▇'.split(' ')
 
     CHANNEL_USERNAME = environ.get('CHANNEL_USERNAME', '')
     if len(CHANNEL_USERNAME) == 0:
@@ -700,6 +719,7 @@ def load_config():
                         'TIME_GAP': TIME_GAP,
                         'FINISHED_PROGRESS_STR': FINISHED_PROGRESS_STR,
                         'UN_FINISHED_PROGRESS_STR': UN_FINISHED_PROGRESS_STR,
+                        'MULTI_WORKING_PROGRESS_STR': MULTI_WORKING_PROGRESS_STR,
                         'EMOJI_THEME': EMOJI_THEME,
                         'SHOW_LIMITS_IN_STATS': SHOW_LIMITS_IN_STATS,
                         'TELEGRAPH_STYLE': TELEGRAPH_STYLE,
@@ -743,7 +763,8 @@ def get_buttons(key=None, edit_type=None):
         buttons.sbutton('Close', "botset close")
         msg = 'Bot Settings:'
     elif key == 'var':
-        for k in list(config_dict.keys())[START:10+START]:
+        alpha_config = OrderedDict(sorted(config_dict.items()))
+        for k in list(alpha_config.keys())[START:10+START]:
             buttons.sbutton(k, f"botset editvar {k}")
         if STATE == 'view':
             buttons.sbutton('Edit', "botset edit var")
@@ -838,8 +859,12 @@ def edit_variable(update, context, omsg, key):
     elif key == 'TORRENT_TIMEOUT':
         value = int(value)
         downloads = aria2.get_downloads()
-        if downloads:
-            aria2.set_options({'bt-stop-timeout': f'{value}'}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {'bt-stop-timeout': f'{value}'})
+                except Exception as e:
+                    LOGGER.error(e)
         aria2_options['bt-stop-timeout'] = f'{value}'
     elif key == 'TG_SPLIT_SIZE':
         value = min(int(value), tgBotMaxFileSize)
@@ -886,8 +911,12 @@ def edit_aria(update, context, omsg, key):
         aria2.set_global_options({key: value})
     else:
         downloads = aria2.get_downloads()
-        if downloads:
-            aria2.set_options({key: value}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {key: value})
+                except Exception as e:
+                    LOGGER.error(e)
     aria2_options[key] = value
     update_buttons(omsg, 'aria')
     update.message.delete()
@@ -925,6 +954,10 @@ def update_private_file(update, context, omsg):
             config_dict['USE_SERVICE_ACCOUNTS'] = False
             if DATABASE_URL:
                 DbManger().update_config({'USE_SERVICE_ACCOUNTS': False})
+        elif file_name in ['.netrc', 'netrc']:
+            srun(["touch", ".netrc"])
+            srun(["cp", ".netrc", "/root/.netrc"])
+            srun(["chmod", "600", ".netrc"])
         update.message.delete()
     else:
         doc = update.message.document
@@ -1015,9 +1048,15 @@ def edit_bot_settings(update, context):
             GLOBAL_EXTENSION_FILTER.append('.aria2')
         elif data[2] == 'TORRENT_TIMEOUT':
             downloads = aria2.get_downloads()
-            if downloads:
-                aria2.set_options({'bt-stop-timeout': '0'}, downloads)
+            for download in downloads:
+                if not download.is_complete:
+                    try:
+                        aria2.client.change_option(download.gid, {'bt-stop-timeout': '0'})
+                    except Exception as e:
+                        LOGGER.error(e)
             aria2_options['bt-stop-timeout'] = '0'
+            if DATABASE_URL:
+                    DbManger().update_aria2('bt-stop-timeout', '0')
         elif data[2] == 'BASE_URL':
             srun(["pkill", "-9", "-f", "gunicorn"])
         elif data[2] == 'SERVER_PORT':
@@ -1049,8 +1088,12 @@ def edit_bot_settings(update, context):
         aria2_options[data[2]] = value
         update_buttons(message, 'aria')
         downloads = aria2.get_downloads()
-        if downloads:
-            aria2.set_options({data[2]: value}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {data[2]: value})
+                except Exception as e:
+                    LOGGER.error(e)
         if DATABASE_URL:
             DbManger().update_aria2(data[2], value)
     elif data[1] == 'emptyaria':
@@ -1059,8 +1102,12 @@ def edit_bot_settings(update, context):
         aria2_options[data[2]] = ''
         update_buttons(message, 'aria')
         downloads = aria2.get_downloads()
-        if downloads:
-            aria2.set_options({data[2]: ''}, downloads)
+        for download in downloads:
+            if not download.is_complete:
+                try:
+                    aria2.client.change_option(download.gid, {data[2]: ''})
+                except Exception as e:
+                    LOGGER.error(e)
         if DATABASE_URL:
             DbManger().update_aria2(data[2], '')
     elif data[1] == 'emptyqbit':
@@ -1131,8 +1178,8 @@ def edit_bot_settings(update, context):
         handler_dict[message.chat.id] = True
         update_buttons(message, data[2], data[1])
         partial_fnc = partial(edit_aria, omsg=message, key=data[2])
-        value_handler = MessageHandler(filters=Filters.text & Filters.chat(message.chat.id) &
-                        (CustomFilters.owner_filter | CustomFilters.sudo_user), callback=partial_fnc, run_async=True)
+        value_handler = MessageHandler(filters=Filters.text & Filters.chat(message.chat.id) & Filters.user(user_id),
+                                       callback=partial_fnc, run_async=True)
         dispatcher.add_handler(value_handler)
         while handler_dict[message.chat.id]:
             if time() - start_time > 60:
